@@ -1,16 +1,12 @@
 const socket = io();
 
-// Ask user for their name (with localStorage persistence)
-let userName = localStorage.getItem("userName");
-if (!userName) {
-  userName = prompt("Please enter your name:");
-  if (!userName || userName.trim() === "") {
-    userName = "Anonymous";
-  } else {
-    // Trim and limit name length
-    userName = userName.trim().substring(0, 20);
-  }
-  localStorage.setItem("userName", userName);
+// Ask user for their name
+let userName = prompt("Please enter your name:");
+if (!userName || userName.trim() === "") {
+  userName = "Anonymous";
+} else {
+  // Trim and limit name length
+  userName = userName.trim().substring(0, 20);
 }
 
 if (navigator.geolocation) {
