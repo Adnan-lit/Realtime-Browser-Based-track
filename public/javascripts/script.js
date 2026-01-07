@@ -37,10 +37,17 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 }).addTo(map);
 
 const markers = {};
+let isMapCentered = false;
 
 socket.on("receive-location", (data) => {
   const { id, latitude, longitude, name } = data;
-  map.setView([latitude, longitude], 16);
+
+  // Only center map on current user's first location
+  if (id === socket.id && !isMapCentered) {
+    map.setView([latitude, longitude], 16);
+    isMapCentered = true;
+  }
+
   if (markers[id]) {
     markers[id].setLatLng([latitude, longitude]);
   } else {
