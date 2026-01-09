@@ -16,12 +16,46 @@ const io = socketio(server, {
 app.set("view engine", "ejs");
 app.use(express.static(path.join(__dirname, "public")));
 
+// Store all connected users and their locations
+const users = new Map(); // Map<socketId, {latitude, longitude, name, lastUpdate}>
+
 io.on("connection", (socket) => {
+  console.log(`User connected: ${socket.id}`);
+
+  // Send all existing users to the newly connected user
+  const existingUsers = Array.from(users.entries()).map(([id, data]) => ({
+    id,
+    ...data,
+  }));
+  
+  if (existingUsers.length > 0) {
+    socket.emit("existing-users", existingUsers);
+    console.log(`Sent ${existingUsers.length} existing users to ${socket.id}`);
+  }
+
   socket.on("send-location", (data) => {
-    io.emit("receive-location", { id: socket.id, ...data });
+    const { latitude, longitude, name } = data;
+    
+    // Store/update user location
+    users.set(socket.id, {
+      latitude,
+      longitude,
+      name: name || "Anonymous",
+      lastUpdate: Date.now(),
+    });
+
+    // Broadcast to all clients (including sender)
+    io.emit("receive-location", {
+      id: socket.id,
+      latitude,
+      longitude,
+      name: name || "Anonymous",
+    });
   });
 
   socket.on("disconnect", () => {
+    console.log(`User disconnected: ${socket.id}`);
+    users.delete(socket.id);
     io.emit("user-disconnected", socket.id);
   });
 });
