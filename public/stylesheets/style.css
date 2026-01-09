@@ -220,6 +220,56 @@ body {
   }
 }
 
+/* On-Screen Notifications */
+.on-screen-notification {
+  position: fixed;
+  top: 70px;
+  left: 20px;
+  background-color: #4caf50;
+  color: white;
+  padding: 14px 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 10001;
+  min-width: 250px;
+  max-width: 350px;
+  opacity: 0;
+  transform: translateX(-400px);
+  transition: all 0.3s ease;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.on-screen-notification::before {
+  content: "🔔";
+  font-size: 18px;
+}
+
+.on-screen-notification.show {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.on-screen-notification.notification-success {
+  background-color: #4caf50;
+}
+
+.on-screen-notification.notification-info {
+  background-color: #2196f3;
+}
+
+.on-screen-notification.notification-warning {
+  background-color: #ff9800;
+}
+
+.on-screen-notification.notification-error {
+  background-color: #f44336;
+}
+
 /* User List Sidebar */
 #userListSidebar {
   position: fixed;
@@ -319,6 +369,15 @@ body {
 .user-list-item .user-location {
   font-size: 12px;
   color: #666;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.user-list-item .user-distance {
+  font-weight: 600;
+  color: #4a90e2;
+  margin-top: 2px;
 }
 
 .no-users {

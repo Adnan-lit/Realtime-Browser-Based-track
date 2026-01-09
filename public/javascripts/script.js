@@ -3,12 +3,17 @@ const socket = io();
 let userName = "";
 let locationWatchId = null;
 let isTracking = false;
+let isLocationVisible = true; // Privacy state
+let currentLocation = null; // Store current location for distance calculations
+let notificationPermission = null; // Store notification permission status
+let notificationsEnabled = true; // User preference for notifications
 
 // DOM elements
 const modal = document.getElementById("nameModal");
 const nameInput = document.getElementById("nameInput");
 const submitBtn = document.getElementById("submitName");
 const changeNameBtn = document.getElementById("changeNameBtn");
+const togglePrivacyBtn = document.getElementById("togglePrivacyBtn");
 const currentUserNameSpan = document.getElementById("currentUserName");
 const userCountSpan = document.getElementById("userCount");
 const connectionStatus = document.getElementById("connectionStatus");
@@ -78,6 +83,7 @@ function startGeolocation() {
   locationWatchId = navigator.geolocation.watchPosition(
     (position) => {
       const { latitude, longitude } = position.coords;
+      currentLocation = { latitude, longitude };
       socket.emit("send-location", { latitude, longitude, name: userName });
     },
     (error) => {
@@ -149,7 +155,10 @@ socket.on("connect_error", (error) => {
 });
 
 // Initialize on page load
-window.addEventListener("DOMContentLoaded", init);
+window.addEventListener("DOMContentLoaded", () => {
+  init();
+  requestNotificationPermission();
+});
 
 const map = L.map("map").setView([0, 0], 16);
 
@@ -174,10 +183,14 @@ socket.on("existing-users", (usersArray) => {
     const { id, latitude, longitude, name } = user;
     // Don't create marker for current user here (will be created when location is sent)
     if (id !== socket.id) {
-      createOrUpdateMarker(id, latitude, longitude, name, false);
+      createOrUpdateMarker(id, latitude, longitude, name, false, false); // false = not current user, false = suppress notification
     }
   });
   updateUserCount();
+  // Update user list after loading existing users
+  if (currentLocation) {
+    updateUserList();
+  }
 });
 
 socket.on("receive-location", (data) => {
@@ -191,15 +204,119 @@ socket.on("receive-location", (data) => {
   }
 
   createOrUpdateMarker(id, latitude, longitude, name, isCurrentUser);
+
+  // Always update user list to refresh distances
+  updateUserList();
 });
 
+// Calculate distance between two coordinates (Haversine formula)
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const distance = R * c;
+  return distance;
+}
+
+// Format distance for display
+function formatDistance(distance) {
+  if (distance < 1) {
+    return `${Math.round(distance * 1000)}m`;
+  } else if (distance < 10) {
+    return `${distance.toFixed(2)}km`;
+  } else {
+    return `${distance.toFixed(1)}km`;
+  }
+}
+
+// Request notification permission
+function requestNotificationPermission() {
+  if ("Notification" in window) {
+    Notification.requestPermission().then((permission) => {
+      notificationPermission = permission;
+      console.log("Notification permission:", permission);
+    });
+  }
+}
+
+// Show notification when user comes online
+function showUserOnlineNotification(userName) {
+  if (!notificationsEnabled) return;
+
+  if ("Notification" in window && Notification.permission === "granted") {
+    new Notification(`${userName} is now online`, {
+      body: "A new user has joined the map",
+      icon: "https://cdn-icons-png.flaticon.com/512/149/149071.png",
+      tag: "user-online",
+    });
+  }
+
+  // Also show on-screen notification
+  showOnScreenNotification(`${userName} is now online`, "success");
+}
+
+// Track active notifications for stacking
+let notificationCount = 0;
+
+// Show on-screen notification
+function showOnScreenNotification(message, type = "info") {
+  // Always show on-screen notification regardless of browser notification permission
+  const notification = document.createElement("div");
+  notification.className = `on-screen-notification notification-${type}`;
+  notification.textContent = message;
+
+  // Stack notifications vertically
+  notification.style.top = `${70 + notificationCount * 70}px`;
+  notificationCount++;
+
+  document.body.appendChild(notification);
+
+  // Force visibility
+  notification.style.display = "flex";
+  notification.style.visibility = "visible";
+
+  // Animate in
+  setTimeout(() => {
+    notification.classList.add("show");
+  }, 10);
+
+  // Remove after 4 seconds
+  setTimeout(() => {
+    notification.classList.remove("show");
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.remove();
+        notificationCount = Math.max(0, notificationCount - 1);
+      }
+    }, 300);
+  }, 4000);
+}
+
 // Helper function to create or update markers
-function createOrUpdateMarker(id, latitude, longitude, name, isCurrentUser) {
+function createOrUpdateMarker(
+  id,
+  latitude,
+  longitude,
+  name,
+  isCurrentUser,
+  showNotification = true
+) {
+  const isNewUser = !markers[id];
+
   // Store user data
   if (!userData[id]) {
     userData[id] = {};
   }
   userData[id].name = name || "Anonymous";
+  userData[id].latitude = latitude;
+  userData[id].longitude = longitude;
   userData[id].lastUpdate = Date.now();
 
   if (markers[id]) {
@@ -208,11 +325,27 @@ function createOrUpdateMarker(id, latitude, longitude, name, isCurrentUser) {
       animate: true,
       duration: 1.0,
     });
-    // Update tooltip if name changed
+    // Update tooltip and popup with distance
     if (name && markers[id].getTooltip()) {
       const displayName = isCurrentUser ? `${name} (You)` : name;
-      markers[id].setTooltipContent(displayName);
-      markers[id].setPopupContent(displayName);
+      let tooltipText = displayName;
+      let popupText = displayName;
+
+      // Add distance if we have current location and it's not the current user
+      if (currentLocation && !isCurrentUser) {
+        const distance = calculateDistance(
+          currentLocation.latitude,
+          currentLocation.longitude,
+          latitude,
+          longitude
+        );
+        const distanceText = formatDistance(distance);
+        tooltipText = `${displayName} (${distanceText})`;
+        popupText = `${displayName}<br><small>Distance: ${distanceText}</small>`;
+      }
+
+      markers[id].setTooltipContent(tooltipText);
+      markers[id].setPopupContent(popupText);
     }
   } else {
     // Create new marker with different colors for different users
@@ -246,17 +379,57 @@ function createOrUpdateMarker(id, latitude, longitude, name, isCurrentUser) {
     // Add tooltip and popup
     if (name) {
       const displayName = isCurrentUser ? `${name} (You)` : name;
-      markers[id].bindTooltip(displayName, {
+      let tooltipText = displayName;
+      let popupText = displayName;
+
+      // Add distance if we have current location and it's not the current user
+      if (currentLocation && !isCurrentUser) {
+        const distance = calculateDistance(
+          currentLocation.latitude,
+          currentLocation.longitude,
+          latitude,
+          longitude
+        );
+        const distanceText = formatDistance(distance);
+        tooltipText = `${displayName} (${distanceText})`;
+        popupText = `${displayName}<br><small>Distance: ${distanceText}</small>`;
+      }
+
+      markers[id].bindTooltip(tooltipText, {
         permanent: true,
         direction: "top",
         className: "user-tooltip",
       });
-      markers[id].bindPopup(displayName);
+      markers[id].bindPopup(popupText);
+    }
+
+    // Show notification for new user (not current user, and if notifications enabled)
+    if (isNewUser && !isCurrentUser && showNotification) {
+      showUserOnlineNotification(name || "Anonymous");
     }
 
     // Update user count
     updateUserCount();
   }
+
+  // Update distance for existing markers when current location changes
+  if (!isCurrentUser && currentLocation && markers[id]) {
+    const distance = calculateDistance(
+      currentLocation.latitude,
+      currentLocation.longitude,
+      latitude,
+      longitude
+    );
+    const distanceText = formatDistance(distance);
+    const displayName = name || "Anonymous";
+    markers[id].setTooltipContent(`${displayName} (${distanceText})`);
+    markers[id].setPopupContent(
+      `${displayName}<br><small>Distance: ${distanceText}</small>`
+    );
+  }
+
+  // Update user list whenever a marker is updated to refresh distances
+  updateUserList();
 }
 
 socket.on("user-disconnected", (id) => {
@@ -277,12 +450,33 @@ function updateUserCount() {
 
 // Update user list sidebar
 function updateUserList() {
-  const users = Object.keys(markers).map((id) => ({
-    id,
-    name: userData[id]?.name || "Anonymous",
-    isCurrentUser: id === socket.id,
-    marker: markers[id],
-  }));
+  const users = Object.keys(markers).map((id) => {
+    const latLng = markers[id].getLatLng();
+    let distance = null;
+
+    // Calculate distance if we have current location
+    if (currentLocation) {
+      if (id === socket.id) {
+        distance = 0; // Current user is 0m away
+      } else {
+        distance = calculateDistance(
+          currentLocation.latitude,
+          currentLocation.longitude,
+          latLng.lat,
+          latLng.lng
+        );
+      }
+    }
+
+    return {
+      id,
+      name: userData[id]?.name || "Anonymous",
+      isCurrentUser: id === socket.id,
+      marker: markers[id],
+      latLng,
+      distance,
+    };
+  });
 
   if (users.length === 0) {
     userListContent.innerHTML = '<p class="no-users">No users connected</p>';
@@ -291,15 +485,27 @@ function updateUserList() {
 
   userListContent.innerHTML = users
     .map((user) => {
-      const latLng = user.marker.getLatLng();
-      const locationText = `${latLng.lat.toFixed(4)}, ${latLng.lng.toFixed(4)}`;
+      const locationText = `${user.latLng.lat.toFixed(
+        4
+      )}, ${user.latLng.lng.toFixed(4)}`;
+      // Always show distance if we have current location
+      let distanceText = "";
+      if (user.distance !== null) {
+        if (user.isCurrentUser) {
+          distanceText = ` • You (0m)`;
+        } else {
+          distanceText = ` • ${formatDistance(user.distance)} away`;
+        }
+      }
       return `
         <div class="user-list-item ${user.isCurrentUser ? "current-user" : ""}" 
              data-user-id="${user.id}">
           <div class="user-name ${user.isCurrentUser ? "you" : ""}">
             ${user.name} ${user.isCurrentUser ? "(You)" : ""}
           </div>
-          <div class="user-location">${locationText}</div>
+          <div class="user-location">
+            ${locationText}${distanceText}
+          </div>
         </div>
       `;
     })
